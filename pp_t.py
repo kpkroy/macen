@@ -63,6 +63,7 @@ def try_register(driver, target_url, target_id, title_keyword):
         rows = tbody.find_elements(By.CSS_SELECTOR, "tr")
 
         total_registerable = 0
+        registerable_titles = []
         target_found = False
 
         for row in rows:
@@ -72,7 +73,8 @@ def try_register(driver, target_url, target_id, title_keyword):
             register_links = row.find_elements(By.CSS_SELECTOR, "a.regist")
 
             if register_links:
-                total_registerable += 1  # 전체 '접수하기' 가능한 강좌 수를 센다.
+                total_registerable += 1
+                registerable_titles.append(title_text)
 
                 if title_keyword is None or title_keyword in title_text:
                     logger.info(f"[{target_id}] Found matching course '{title_text}' → clicking")
@@ -100,6 +102,9 @@ def try_register(driver, target_url, target_id, title_keyword):
             if total_registerable > 0:
                 logger.info(
                     f"[{target_id}] ⚠️ '접수하기' 가능한 강좌 {total_registerable}개 발견했지만, title_keyword '{title_keyword}'와 일치하는 강좌는 없습니다."
+                )
+                logger.info(
+                    f"[{target_id}] 접수 가능 강좌 목록: {registerable_titles}"
                 )
             else:
                 logger.info(
