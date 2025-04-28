@@ -62,44 +62,55 @@ def try_register(driver, target_url, target_id, title_keyword):
         tbody = driver.find_element(By.CSS_SELECTOR, "tbody.txtcenter")
         rows = tbody.find_elements(By.CSS_SELECTOR, "tr")
 
+        total_registerable = 0
         target_found = False
+
         for row in rows:
             title_cell = row.find_element(By.CSS_SELECTOR, "td[data-title='강좌명']")
             title_text = title_cell.text.strip()
 
             register_links = row.find_elements(By.CSS_SELECTOR, "a.regist")
 
-            if register_links and (title_keyword is None or title_keyword in title_text):
-                logger.info(f"[{target_id}] Found matching course '{title_text}' → clicking")
-                register_links[0].click()
+            if register_links:
+                total_registerable += 1  # 전체 '접수하기' 가능한 강좌 수를 센다.
 
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "button.button.action_write"))
-                )
-                WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button.button.action_write"))
-                ).click()
+                if title_keyword is None or title_keyword in title_text:
+                    logger.info(f"[{target_id}] Found matching course '{title_text}' → clicking")
+                    register_links[0].click()
 
-                WebDriverWait(driver, 10).until(EC.alert_is_present())
-                alert = driver.switch_to.alert
-                logger.info(f"[{target_id}] ⚠️ Alert text: {alert.text}")
-                time.sleep(1)
-                alert.accept()
-                time.sleep(1)
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "button.button.action_write"))
+                    )
+                    WebDriverWait(driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "button.button.action_write"))
+                    ).click()
 
-                logger.info(f"[{target_id}] Registration completed!")
-                target_found = True
-                break
+                    WebDriverWait(driver, 10).until(EC.alert_is_present())
+                    alert = driver.switch_to.alert
+                    logger.info(f"[{target_id}] ⚠️ Alert text: {alert.text}")
+                    time.sleep(1)
+                    alert.accept()
+                    time.sleep(1)
+
+                    logger.info(f"[{target_id}] Registration completed!")
+                    target_found = True
+                    break
 
         if not target_found:
-            logger.info(
-                f"[{target_id}] No matching '접수하기' found (keyword='{title_keyword}') - skipping"
-            )
+            if total_registerable > 0:
+                logger.info(
+                    f"[{target_id}] ⚠️ '접수하기' 가능한 강좌 {total_registerable}개 발견했지만, title_keyword '{title_keyword}'와 일치하는 강좌는 없습니다."
+                )
+            else:
+                logger.info(
+                    f"[{target_id}] No '접수하기' buttons found - skipping"
+                )
         return target_found
 
     except Exception as e:
         logger.warning(f"[{target_id}] Exception: {e}")
         return False
+
 
 def keep_checking_until(target_url, target_id, interval_sec, end_time_str, user_id, user_pw, title_keyword):
     logger.info(f"[🔁] Starting keep-checking loop every {interval_sec} sec until {end_time_str}")
