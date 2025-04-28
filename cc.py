@@ -2,30 +2,34 @@ import argparse
 import logging
 import time
 from datetime import datetime, timedelta
-from multiprocessing import Process, Event, Manager
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+import threading
 
 # Logger setup
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
-logger = logging.getLogger("CourseRegister")
+logger = logging.getLogger("BurstRegister")
+
+success_event = threading.Event()
 
 def setup_driver():
     options = Options()
-    # options.add_argument("--headless")  # 실제 브라우저 보이게 하기
+    options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
-    driver = webdriver.Chrome(options=options)
-    return driver
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
 
-def login(driver, redirect_url):
+def login(driver, redirect_url, user_id, user_pw):
     login_url = "https://www.mfac.or.kr/account/login.jsp"
     driver.get(login_url)
-    time.sleep(3)  # 페이지 로딩 확인 대기
+    time.sleep(3)
     try:
         id_input = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "id"))
@@ -33,8 +37,8 @@ def login(driver, redirect_url):
         pw_input = driver.find_element(By.ID, "pw")
         login_button = driver.find_element(By.ID, "btnLogin")
 
-        id_input.send_keys("kpkroy")
-        pw_input.send_keys("rlathf12")
+        id_input.send_keys(user_id)
+        pw_input.send_keys(user_pw)
         driver.execute_script("arguments[0].click();", login_button)
         time.sleep(3)
 
@@ -46,110 +50,126 @@ def login(driver, redirect_url):
         logger.warning(f"[❌] Login failed: {e}")
         return False
 
-def try_register(target_url, target_id, success_flag):
-    driver = setup_driver()
-    logger.info(f"Tab started: {target_url}")
+def try_register(driver, target_url, target_id, trigger_time, final_click_time, class_name):
     try:
-        if not login(driver, target_url):
+        now = datetime.now()
+        if now < trigger_time:
+            time_to_wait = (trigger_time - now).total_seconds()
+            logger.info(f"[{target_id}] ⏱ Waiting {time_to_wait:.2f}s for FLOW start...")
+            time.sleep(time_to_wait)
+
+        if success_event.is_set():
+            logger.info(f"[{target_id}] Skipped due to prior success.")
             return
 
-        search_button = driver.find_element(By.CSS_SELECTOR, "button.submit")
-        search_button.click()
+        logger.info(f"[{target_id}] Launching FLOW")
+        driver.get(target_url)
+        WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "button.submit"))
+        ).click()
 
-        try:
-            WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "a.end, a.wait, a.regist"))
-            )
-        except TimeoutException:
-            logger.info(f"[{target_id}] '접수하기' not found in time - stopping")
-            return
-
-        tbody = driver.find_element(By.CSS_SELECTOR, "tbody.txtcenter")
-        register_links = tbody.find_elements(By.CSS_SELECTOR, "a.regist")
-        closed_links = tbody.find_elements(By.CSS_SELECTOR, "a.end")
-        pending_links = tbody.find_elements(By.CSS_SELECTOR, "a.wait")
-
-        if not register_links:
-            logger.info(
-                f"[{target_id}] '접수하기' not found - 접수종료 {len(closed_links)}개, 준비중 {len(pending_links)}개 - stopping"
-            )
-            return
-
-        register_link = register_links[0]
-        logger.info(f"[{target_id}] Found '접수하기' → clicking")
-        register_link.click()
-
-        apply_button = WebDriverWait(driver, 2).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "button.button.action_write"))
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a.end, a.wait, a.regist"))
         )
-        apply_button.click()
-        logger.info(f"[{target_id}] Registration completed!")
-        success_flag.set()
+
+        rows = driver.find_elements(By.CSS_SELECTOR, "tbody.txtcenter tr")
+        found = False
+        for row in rows:
+            try:
+                title_cell = row.find_element(By.CSS_SELECTOR, 'td[data-title="강좌명"]')
+                title = title_cell.text.strip()
+                if class_name and class_name not in title:
+                    continue
+
+                register_links = row.find_elements(By.CSS_SELECTOR, "a.regist")
+                if not register_links:
+                    continue
+
+                logger.info(f"[{target_id}] Found '접수하기' for [{title}] → clicking")
+                register_links[0].click()
+
+                apply_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "button.button.action_write"))
+                )
+                apply_button.click()
+
+                now = datetime.now()
+                if now < final_click_time:
+                    delay = (final_click_time - now).total_seconds()
+                    logger.info(f"[{target_id}] ⏳ Waiting {delay:.2f}s to accept popup at exact moment")
+                    time.sleep(delay)
+
+                WebDriverWait(driver, 10).until(EC.alert_is_present())
+                alert = driver.switch_to.alert
+                logger.info(f"[{target_id}] ⚠️ Alert: {alert.text}")
+                alert.accept()
+
+                logger.info(f"[{target_id}] ✅ Registration completed!")
+                success_event.set()
+                found = True
+                break
+            except Exception as inner:
+                logger.warning(f"[{target_id}] Error processing row: {inner}")
+
+        if not found:
+            logger.info(f"[{target_id}] No matching class found or no '접수하기' link - skipping")
+
     except Exception as e:
         logger.warning(f"[{target_id}] Exception: {e}")
     finally:
         driver.quit()
 
-def wait_until(target_time_str):
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    target_time = datetime.strptime(f"{today_str} {target_time_str}", "%Y-%m-%d %H:%M:%S")
+def launch_burst(target_url, target_id, target_time_str, rate, user_id, user_pw, class_name):
+    today = datetime.now().strftime("%Y-%m-%d")
+    target_time = datetime.strptime(f"{today} {target_time_str}", "%Y-%m-%d %H:%M:%S")
     login_time = target_time - timedelta(seconds=45)
-    launch_time = target_time - timedelta(seconds=2)
+    tab_start_time = target_time - timedelta(seconds=2)
+    tab_end_time = target_time + timedelta(seconds=1)
 
-    # Wait until login time
     logger.info(f"🕒 Waiting for login at: {login_time.strftime('%H:%M:%S')}")
     while datetime.now() < login_time:
         time.sleep(0.1)
 
-    logger.info("[🔑] Time to login")
-    return launch_time
+    main_driver = setup_driver()
+    if not login(main_driver, target_url, user_id, user_pw):
+        main_driver.quit()
+        return
 
-def launch_tabs(start_url, target_id, rate, target_time):
-    launch_time = wait_until(target_time)
+    logger.info("⏱️ Login complete. Launching tabs...")
+    interval = (tab_end_time - tab_start_time).total_seconds() / rate
+    threads = []
+    for i in range(rate):
+        trigger_time = tab_start_time + timedelta(seconds=i * interval)
+        t_driver = setup_driver()
+        t = threading.Thread(
+            target=try_register,
+            args=(t_driver, target_url, f"Tab-{i+1}", trigger_time, target_time, class_name)
+        )
+        threads.append(t)
+        t.start()
 
-    logger.info("⏱️ Login completed, waiting for final trigger...")
-    next_log = datetime.now() + timedelta(seconds=5)
-    while datetime.now() < launch_time:
-        if datetime.now() >= next_log:
-            remaining = launch_time - datetime.now()
-            mins, secs = divmod(remaining.total_seconds(), 60)
-            logger.info(f"⏳ Launching in {int(mins)} minutes {int(secs)} seconds")
-            next_log = datetime.now() + timedelta(seconds=5)
-        time.sleep(0.05)
+    for t in threads:
+        t.join()
 
-    manager = Manager()
-    success_flag = manager.Event()
-
-    procs = []
-    interval = 1 / rate
-    for i in range(int(2.5 / interval)):
-        if success_flag.is_set():
-            logger.info("✅ Registration already completed. Stopping further attempts.")
-            break
-        p = Process(target=try_register, args=(start_url, target_id, success_flag))
-        p.start()
-        procs.append(p)
-        time.sleep(interval)
-
-    for p in procs:
-        p.join()
+    logger.info("🎯 Burst registration attempt completed.")
+    main_driver.quit()
 
 def main():
-    parser = argparse.ArgumentParser(description="Course Registration Automation")
+    parser = argparse.ArgumentParser(description="Burst Course Registration")
     parser.add_argument('--id', type=int, default=3, help="Target course ID")
-    parser.add_argument('--url', type=str, default="https://course.mfac.or.kr/fmcs/3?page=1&lecture_type=R&center=MAPOARTCENTER&event=1000000000&class=&subject=&target=&lerturer_name=", help="Start URL")
-    parser.add_argument('--time', type=str, help="Target registration time in HH:MM:SS format")
-    parser.add_argument('--rate', type=float, default=4.0, help="Number of tabs to open per second")
+    parser.add_argument('--url', type=str, required=True, help="Target course URL")
+    parser.add_argument('--time', type=str, required=True, help="Target registration time in HH:MM:SS format")
+    parser.add_argument('--rate', type=int, default=5, help="Number of tabs to launch")
+    parser.add_argument('--user_id', type=str, required=True, help="Login user ID")
+    parser.add_argument('--user_pw', type=str, required=True, help="Login password")
+    parser.add_argument('--class_name', type=str, help="Optional class name to filter")
     args = parser.parse_args()
 
-    if args.time:
-        launch_tabs(args.url, args.id, args.rate, args.time)
+    launch_burst(args.url, args.id, args.time, args.rate, args.user_id, args.user_pw, args.class_name)
 
 if __name__ == '__main__':
     main()
 
-    # pip install webdriver-manager
-
-    # python cc.py --id 7 --rate 1 --time 16:10:00 --url "https://course.mfac.or.kr/fmcs/3?page=1&lecture_type=R&center=MAPOARTCENTER&event=1000000000&class=1000020000&subject=&target=&lerturer_name="
+    # 예시 실행:
+    # python cc.py --id 7 --rate 5 --time 00:00:00 --url "..." --user_id yourid --user_pw yourpw --class_name 효자수영
 
