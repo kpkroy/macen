@@ -161,3 +161,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# python pp_t.py --end_time 23:25:00 --interval 60 --user_id pjs222 --user_pw park1605 --url "https://course.mfac.or.kr/fmcs/3?page=1&lecture_type=R&center=MAPOARTCENTER&event=1000000000&class=1000020000&subject=&target=&lerturer_name=" --title_keyword "19시 A"

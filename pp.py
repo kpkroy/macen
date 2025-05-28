@@ -140,3 +140,4 @@ if __name__ == '__main__':
 
     # 예시 실행:
     # python kp.py --end_time 23:25:00 --interval 30 --url "https://course.mfac.or.kr/fmcs/3?..." --user_id yourid --user_pw yourpw
+    #  python pp.py --end_time 23:25:00 --interval 120 --user_id minkun97 --user_pw Rlaalsrjs97@ --url "https://course.mfac.or.kr/fmcs/3?page=1&lecture_type=R&center=MAPOARTCENTER&event=1000000000&class=1000020000&subject=&target=&lerturer_name="
